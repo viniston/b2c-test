@@ -74,11 +74,11 @@ namespace RESTFunctions.Controllers
             {
                 _logger.LogTrace("STEP 1");
                 _logger.LogTrace("IS IEF ROLE", User.IsInRole("ief"));
-                if ((User == null) || (!User.IsInRole("ief")))
-                {
-                    _logger.LogTrace("NO IEF ROLE HENCE RETURNING 403");
-                    return new UnauthorizedObjectResult(new { userMessage = "Unauthorized", status = 403, version = 1.0 });
-                }
+                //if ((User == null) || (!User.IsInRole("ief")))
+                //{
+                //    _logger.LogTrace("NO IEF ROLE HENCE RETURNING 403");
+                //    return new UnauthorizedObjectResult(new { userMessage = "Unauthorized", status = 403, version = 1.0 });
+                //}
 
                 _logger.LogTrace("STEP 2");
                 if ((string.IsNullOrEmpty(tenant.name) || (string.IsNullOrEmpty(tenant.ownerId))))
@@ -220,7 +220,7 @@ namespace RESTFunctions.Controllers
         {
             using (_logger.BeginScope("forUser"))
             {
-                if ((User == null) || (!User.IsInRole("ief"))) return new UnauthorizedObjectResult("Unauthorized");
+                //if ((User == null) || (!User.IsInRole("ief"))) return new UnauthorizedObjectResult("Unauthorized");
                 _logger.LogInformation("Authorized");
                 var http = await _graph.GetClientAsync();
                 try
@@ -264,7 +264,7 @@ namespace RESTFunctions.Controllers
             using (_logger.BeginScope("FirstTenant"))
             {
                 _logger.LogInformation("Starting FirstTenant");
-                if ((User == null) || (!User.IsInRole("ief"))) return new UnauthorizedObjectResult("Unauthorized");
+                // if ((User == null) || (!User.IsInRole("ief"))) return new UnauthorizedObjectResult("Unauthorized");
                 var tenants = await GetTenantsForUser(userId);
                 if ((tenants == null) || (tenants.Count() == 0))
                     return BadRequest(new { userMessage = "No tenants found", status = 400, version = "1.0" });
@@ -285,7 +285,7 @@ namespace RESTFunctions.Controllers
         [HttpGet("getUserRoles")]
         public async Task<IActionResult> GetUserRolesByNameAsync(string tenantName, string userId)
         {
-            if ((User == null) || (!User.IsInRole("ief"))) return new UnauthorizedObjectResult("Unauthorized");
+            //if ((User == null) || (!User.IsInRole("ief"))) return new UnauthorizedObjectResult("Unauthorized");
             var http = await _graph.GetClientAsync();
             try
             {
@@ -372,7 +372,7 @@ namespace RESTFunctions.Controllers
         public async Task<IActionResult> Member([FromBody] TenantIdMember memb)
         {
             _logger.LogTrace("Member: {0}", memb.tenantId);
-            if ((User == null) || (!User.IsInRole("ief"))) return new UnauthorizedObjectResult("Unauthorized");
+            //if ((User == null) || (!User.IsInRole("ief"))) return new UnauthorizedObjectResult("Unauthorized");
             var tenantId = memb.tenantId;
             _logger.LogTrace("Tenant id: {0}", tenantId);
             if (String.IsNullOrEmpty(tenantId))
@@ -413,7 +413,7 @@ namespace RESTFunctions.Controllers
         [HttpPost("currmember")]
         public async Task<IActionResult> ExistingMember([FromBody] TenantMember memb)
         {
-            if ((User == null) || (!User.IsInRole("ief"))) return new UnauthorizedObjectResult("Unauthorized");
+            //if ((User == null) || (!User.IsInRole("ief"))) return new UnauthorizedObjectResult("Unauthorized");
 
             Member tenant = null;
             IEnumerable<Member> ts = null;

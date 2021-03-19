@@ -1,21 +1,17 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading.Tasks;
+﻿using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Authentication;
-using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
-using Microsoft.Identity.Client;
-using Microsoft.AspNetCore.Mvc;
-using RESTFunctions.Services;
 using Microsoft.Extensions.Hosting;
-using System.Diagnostics;
+using Microsoft.Identity.Client;
 using RESTFunctions.Models;
+using RESTFunctions.Services;
+using System;
+using System.Diagnostics;
+using System.Security.Cryptography.X509Certificates;
+using System.Threading.Tasks;
 
 namespace RESTFunctions
 {
@@ -33,6 +29,12 @@ namespace RESTFunctions
         {
             Trace.WriteLine("Starting Startup");
             services.AddMvc().SetCompatibilityVersion(CompatibilityVersion.Version_3_0);
+            services.AddApplicationInsightsTelemetry("5164dd06-7613-4668-b19a-ee733264f9d1");
+
+
+            //var cert = new X509Certificate2(@"C:\Playground\b2csamples\Scripts\MultiTenant\temp\RESTClientCert.pfx", "password");
+            //var certificate = cert.GetRawCertData();
+            //var b64 = Convert.ToBase64String(certificate);
 
             services.Configure<ClientCertificateOptions>(Configuration.GetSection("AuthCert"));
             services.Configure<ConfidentialClientApplicationOptions>(Configuration.GetSection("ClientCreds"));
@@ -40,7 +42,6 @@ namespace RESTFunctions
             services.AddSingleton<Services.Graph>();
             services.AddTransient<Services.InvitationService>();
             services.AddTransient<Services.GraphOpenExtensions>();
-            services.AddApplicationInsightsTelemetry();
             services.AddAuthentication(options =>
             {
                 options.DefaultScheme = JwtBearerDefaults.AuthenticationScheme;

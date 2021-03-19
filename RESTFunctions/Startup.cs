@@ -40,6 +40,7 @@ namespace RESTFunctions
             services.AddSingleton<Services.Graph>();
             services.AddTransient<Services.InvitationService>();
             services.AddTransient<Services.GraphOpenExtensions>();
+            services.AddApplicationInsightsTelemetry();
             services.AddAuthentication(options =>
             {
                 options.DefaultScheme = JwtBearerDefaults.AuthenticationScheme;

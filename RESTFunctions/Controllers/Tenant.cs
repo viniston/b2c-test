@@ -58,7 +58,8 @@ namespace RESTFunctions.Controllers
                 };
                 await _ext.GetAsync(tenant);
                 return new JsonResult(tenant);
-            } catch (HttpRequestException)
+            }
+            catch (HttpRequestException)
             {
                 return NotFound();
             }
@@ -68,57 +69,118 @@ namespace RESTFunctions.Controllers
         [HttpPost("CreateTenant")]
         public async Task<IActionResult> CreateTenant([FromBody] TenantDetails tenant)
         {
-            _logger.LogDebug("Starting POST /tenant");
-            if ((User == null) || (!User.IsInRole("ief"))) return new UnauthorizedObjectResult("Unauthorized");
-            if ((string.IsNullOrEmpty(tenant.name) || (string.IsNullOrEmpty(tenant.ownerId))))
-                return BadRequest(new { userMessage = "Bad parameters", status = 409, version = 1.0 });
-            tenant.name = tenant.name.ToUpper();
-            var http = await _graph.GetClientAsync();
+            _logger.LogTrace("Starting POST /CreateTenant");
             try
             {
-                await http.GetStringAsync($"{Graph.BaseUrl}users/{tenant.ownerId}");
-            } catch (HttpRequestException ex)
-            {
-                return BadRequest(new { userMessage = "Bad user id", status = 409, version = 1.0 });
+                _logger.LogTrace("STEP 1");
+                _logger.LogTrace("IS IEF ROLE", User.IsInRole("ief"));
+                if ((User == null) || (!User.IsInRole("ief")))
+                {
+                    _logger.LogTrace("NO IEF ROLE HENCE RETURNING 403");
+                    return new UnauthorizedObjectResult(new { userMessage = "Unauthorized", status = 403, version = 1.0 });
+                }
+
+                _logger.LogTrace("STEP 2");
+                if ((string.IsNullOrEmpty(tenant.name) || (string.IsNullOrEmpty(tenant.ownerId))))
+                {
+                    _logger.LogTrace("NO TENANT NAME (Bad parameters) HENCE RETURNING 409");
+                    return BadRequest(new { userMessage = "Bad parameters", status = 409, version = 1.0 });
+                }
+                _logger.LogTrace("STEP 3");
+                _logger.LogTrace("Tenant Name", tenant.name.ToUpper());
+                tenant.name = tenant.name.ToUpper();
+                var http = await _graph.GetClientAsync();
+                try
+                {
+                    _logger.LogTrace("STEP 4");
+                    await http.GetStringAsync($"{Graph.BaseUrl}users/{tenant.ownerId}");
+                }
+                catch (HttpRequestException ex)
+                {
+                    _logger.LogTrace("NO USER ID FROM GRAPH (Bad user id) HENCE RETURNING 409");
+                    return BadRequest(new { userMessage = "Bad user id", status = 409, version = 1.0 });
+                }
+
+                _logger.LogTrace("STEP 5");
+                if ((tenant.name.Length > 60) || !Regex.IsMatch(tenant.name, "^[A-Za-z]\\w*$"))
+                {
+                    _logger.LogTrace("TENANT NAME LENGTH GREATER THAN 60 (Invalid tenant name) HENCE RETURNING 409");
+                    return BadRequest(new { userMessage = "Invalid tenant name", status = 409, version = 1.0 });
+                }
+
+                _logger.LogTrace("STEP 6");
+                var resp = await http.GetAsync($"{Graph.BaseUrl}groups?$filter=(displayName eq '{tenant.name}')");
+                if (!resp.IsSuccessStatusCode)
+                {
+                    _logger.LogTrace("Unable to validate tenant existence HENCE RETURNING 409");
+                    return BadRequest(new
+                    { userMessage = "Unable to validate tenant existence", status = 409, version = 1.0 });
+                }
+
+                _logger.LogTrace("STEP 7");
+                var values = JObject.Parse(await resp.Content.ReadAsStringAsync())["value"].Value<JArray>();
+                if (values.Count != 0)
+                {
+                    _logger.LogTrace("Tenant already exists HENCE RETURNING 409");
+                    return new ConflictObjectResult(new
+                    { userMessage = "Tenant already exists", status = 409, version = 1.0 });
+                }
+
+                _logger.LogTrace("STEP 8");
+                var group = new
+                {
+                    description = tenant.description,
+                    mailNickname = tenant.name,
+                    displayName = tenant.name,
+                    groupTypes = new string[] { },
+                    mailEnabled = false,
+                    securityEnabled = true,
+                };
+                var jGroup = JObject.FromObject(group);
+                var owners = new[] { $"{Graph.BaseUrl}users/{tenant.ownerId}" };
+                jGroup.Add("owners@odata.bind", JArray.FromObject(owners));
+                //jGroup.Add("members@odata.bind", JArray.FromObject(owners));
+                //  https://docs.microsoft.com/en-us/graph/api/group-post-groups?view=graph-rest-1.0&tabs=http
+
+                _logger.LogTrace("STEP 9 CREATING TENANT");
+
+                resp = await http.PostAsync(
+                    $"{Graph.BaseUrl}groups",
+                    new StringContent(jGroup.ToString(), System.Text.Encoding.UTF8, "application/json"));
+                if (!resp.IsSuccessStatusCode)
+                {
+                    _logger.LogTrace("STEP 9 Tenant creation failed");
+                    return BadRequest(new { userMessage = "Tenant creation failed", status = 409, version = 1.0 });
+                }
+
+                _logger.LogTrace("STEP 10");
+                var json = await resp.Content.ReadAsStringAsync();
+                _logger.LogTrace("STEP 11");
+                var newGroup = JObject.Parse(json);
+                var id = newGroup["id"].Value<string>();
+                // Add extensions (open)
+                tenant.id = id;
+
+                _logger.LogTrace("STEP 12 CreateAsync Tenant extensions");
+                tenant.allowSameIssuerMembers = (!string.IsNullOrEmpty(tenant.allowSameIssuerMembersString) &&
+                                                 (string.CompareOrdinal("allow", tenant.allowSameIssuerMembersString) ==
+                                                  0));
+                if (!(await _ext.CreateAsync(tenant)))
+                {
+                    _logger.LogTrace("Tenant extensions creation failed");
+                    return BadRequest(new { userMessage = "Tenant extensions creation failed", status = 409, version = 1.0 });
+                }
+
+                // add this group to the user's tenant collection
+                _logger.LogTrace("Finishing Create tenant");
+                return new OkObjectResult(new { id, roles = new[] { "admin", "member" }, userMessage = "Tenant created" });
             }
-            if ((tenant.name.Length > 60) || !Regex.IsMatch(tenant.name, "^[A-Za-z]\\w*$"))
-                return BadRequest(new { userMessage = "Invalid tenant name", status = 409, version = 1.0 });
-            var resp = await http.GetAsync($"{Graph.BaseUrl}groups?$filter=(displayName eq '{tenant.name}')");
-            if (!resp.IsSuccessStatusCode)
-                return BadRequest(new { userMessage = "Unable to validate tenant existence", status = 409, version = 1.0 });
-            var values = JObject.Parse(await resp.Content.ReadAsStringAsync())["value"].Value<JArray>();
-            if (values.Count != 0)
-                return new ConflictObjectResult(new { userMessage = "Tenant already exists", status = 409, version = 1.0 });
-            var group = new
+            catch (Exception ex)
             {
-                description = tenant.description,
-                mailNickname = tenant.name,
-                displayName = tenant.name,
-                groupTypes = new string[] { },
-                mailEnabled = false,
-                securityEnabled = true,
-            };
-            var jGroup = JObject.FromObject(group);
-            var owners = new string[] { $"{Graph.BaseUrl}users/{tenant.ownerId}" };
-            jGroup.Add("owners@odata.bind", JArray.FromObject(owners));
-            //jGroup.Add("members@odata.bind", JArray.FromObject(owners));
-            //  https://docs.microsoft.com/en-us/graph/api/group-post-groups?view=graph-rest-1.0&tabs=http
-            resp = await http.PostAsync(
-                $"{Graph.BaseUrl}groups",
-                new StringContent(jGroup.ToString(), System.Text.Encoding.UTF8, "application/json"));
-            if (!resp.IsSuccessStatusCode)
-                return BadRequest("Tenant creation failed");
-            var json = await resp.Content.ReadAsStringAsync();
-            var newGroup = JObject.Parse(json);
-            var id = newGroup["id"].Value<string>();
-            // Add extensions (open)
-            tenant.id = id;
-            tenant.allowSameIssuerMembers = (!String.IsNullOrEmpty(tenant.allowSameIssuerMembersString) && (String.Compare("allow", tenant.allowSameIssuerMembersString) == 0));
-            if (!(await _ext.CreateAsync(tenant)))
-                return BadRequest("Tenant extensions creation failed");
-            // add this group to the user's tenant collection
-            _logger.LogInformation("Finishing Create tenant");
-            return new OkObjectResult(new { id, roles = new string[] { "admin", "member" }, userMessage = "Tenant created" });
+                _logger.LogTrace($"Failed with **EXCEPTION** {ex.Message}");
+                return BadRequest(new { userMessage = $"Bad request {ex.Message}", status = 409, version = 1.0 });
+            }
+
         }
         // POST api/values
         [HttpPut("oauth2")]
@@ -321,7 +383,8 @@ namespace RESTFunctions.Controllers
             {
                 var json = await http.GetStringAsync($"{Graph.BaseUrl}groups/{tenantId}");
                 appTenantName = JObject.Parse(json).Value<string>("displayName");
-            } catch(Exception)
+            }
+            catch (Exception)
             {
                 return new NotFoundObjectResult(new { userMessage = "Tenant does not exist", status = 404, version = 1.0 });
             }
@@ -351,7 +414,7 @@ namespace RESTFunctions.Controllers
         public async Task<IActionResult> ExistingMember([FromBody] TenantMember memb)
         {
             if ((User == null) || (!User.IsInRole("ief"))) return new UnauthorizedObjectResult("Unauthorized");
-            
+
             Member tenant = null;
             IEnumerable<Member> ts = null;
             if (!String.IsNullOrEmpty(memb.userId)) // for an AAD user new to B2C this could be empty
@@ -363,14 +426,16 @@ namespace RESTFunctions.Controllers
             if (tenant != null)
             {
                 var t = await _ext.GetAsync(new TenantDetails() { id = tenant.tenantId });
-                return new JsonResult(new {
+                return new JsonResult(new
+                {
                     tenant.tenantId,
                     name = tenant.tenantName,
                     requireMFA = t.requireMFA,
                     tenant.roles, // .Aggregate((a, s) => $"{a},{s}"),
                     allTenants = ts.Select(t => t.tenantName)  // .Aggregate((a, s) => $"{a},{s}")
                 });
-            } else if (String.Equals("commonaad", memb.identityProvider)) // perhaps this tenant allows users from same directory as creator
+            }
+            else if (String.Equals("commonaad", memb.identityProvider)) // perhaps this tenant allows users from same directory as creator
             {
                 var id = await GetTenantIdFromNameAsync(memb.tenantName);
                 if (!String.IsNullOrEmpty(id))
@@ -441,15 +506,15 @@ namespace RESTFunctions.Controllers
         }
     }
 
-   /* public class TenantDef
-    {
-        public string name { get; set; }
-        public string description { get; set; }
-        public string ownerId { get; set; }
-        public bool requireMFA { get; set; }
-        public string identityProvider { get; set; }
-        public string tenantId { get; set; }
-    } */
+    /* public class TenantDef
+     {
+         public string name { get; set; }
+         public string description { get; set; }
+         public string ownerId { get; set; }
+         public bool requireMFA { get; set; }
+         public string identityProvider { get; set; }
+         public string tenantId { get; set; }
+     } */
     public class TenantMember
     {
         public string tenantName { get; set; }

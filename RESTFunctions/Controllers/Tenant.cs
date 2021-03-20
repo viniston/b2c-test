@@ -1,22 +1,19 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Diagnostics;
-using System.IdentityModel.Tokens.Jwt;
-using System.Linq;
-using System.Net.Http;
-using System.Security.Claims;
-using System.Security.Cryptography.X509Certificates;
-using System.Text;
-using System.Text.RegularExpressions;
-using System.Threading.Tasks;
-using Microsoft.AspNetCore.Authorization;
+﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
-using Microsoft.IdentityModel.Tokens;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using RESTFunctions.Models;
 using RESTFunctions.Services;
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Linq;
+using System.Net.Http;
+using System.Security.Claims;
+using System.Text;
+using System.Text.RegularExpressions;
+using System.Threading.Tasks;
 
 namespace RESTFunctions.Controllers
 {
@@ -69,64 +66,97 @@ namespace RESTFunctions.Controllers
         [HttpPost("CreateTenant")]
         public async Task<IActionResult> CreateTenant([FromBody] TenantDetails tenant)
         {
-            _logger.LogTrace("Starting POST /CreateTenant");
+            _logger.LogInformation("Starting POST /CreateTenant");
             try
             {
-                _logger.LogTrace("STEP 1");
-                _logger.LogTrace("IS IEF ROLE", User.IsInRole("ief"));
-                //if ((User == null) || (!User.IsInRole("ief")))
-                //{
-                //    _logger.LogTrace("NO IEF ROLE HENCE RETURNING 403");
-                //    return new UnauthorizedObjectResult(new { userMessage = "Unauthorized", status = 403, version = 1.0 });
-                //}
+                _logger.LogInformation("STEP 1");
+                _logger.LogInformation("IS IEF ROLE", User.IsInRole("ief"));
+                if ((User == null) || (!User.IsInRole("ief")))
+                {
+                    _logger.LogInformation("NO IEF ROLE HENCE RETURNING 403");
+                    return new UnauthorizedObjectResult(new { userMessage = "Unauthorized", status = 403, version = 1.0 });
+                }
 
-                _logger.LogTrace("STEP 2");
+                _logger.LogInformation("STEP 2");
                 if ((string.IsNullOrEmpty(tenant.name) || (string.IsNullOrEmpty(tenant.ownerId))))
                 {
-                    _logger.LogTrace("NO TENANT NAME (Bad parameters) HENCE RETURNING 409");
+                    _logger.LogInformation("NO TENANT NAME (Bad parameters) HENCE RETURNING 409");
                     return BadRequest(new { userMessage = "Bad parameters", status = 409, version = 1.0 });
                 }
-                _logger.LogTrace("STEP 3");
-                _logger.LogTrace("Tenant Name", tenant.name.ToUpper());
+                _logger.LogInformation("STEP 3");
+                _logger.LogInformation("Tenant Name", tenant.name.ToUpper());
                 tenant.name = tenant.name.ToUpper();
                 var http = await _graph.GetClientAsync();
                 try
                 {
-                    _logger.LogTrace("STEP 4");
+                    _logger.LogInformation("STEP 4");
                     await http.GetStringAsync($"{Graph.BaseUrl}users/{tenant.ownerId}");
                 }
                 catch (HttpRequestException ex)
                 {
-                    _logger.LogTrace("NO USER ID FROM GRAPH (Bad user id) HENCE RETURNING 409");
+                    _logger.LogInformation("NO USER ID FROM GRAPH (Bad user id) HENCE RETURNING 409");
                     return BadRequest(new { userMessage = "Bad user id", status = 409, version = 1.0 });
                 }
 
-                _logger.LogTrace("STEP 5");
+                _logger.LogInformation("STEP 5");
                 if ((tenant.name.Length > 60) || !Regex.IsMatch(tenant.name, "^[A-Za-z]\\w*$"))
                 {
-                    _logger.LogTrace("TENANT NAME LENGTH GREATER THAN 60 (Invalid tenant name) HENCE RETURNING 409");
+                    _logger.LogInformation("TENANT NAME LENGTH GREATER THAN 60 (Invalid tenant name) HENCE RETURNING 409");
                     return BadRequest(new { userMessage = "Invalid tenant name", status = 409, version = 1.0 });
                 }
 
-                _logger.LogTrace("STEP 6");
+                _logger.LogInformation("STEP 6");
                 var resp = await http.GetAsync($"{Graph.BaseUrl}groups?$filter=(displayName eq '{tenant.name}')");
                 if (!resp.IsSuccessStatusCode)
                 {
-                    _logger.LogTrace("Unable to validate tenant existence HENCE RETURNING 409");
+                    _logger.LogInformation("Unable to validate tenant existence HENCE RETURNING 409");
                     return BadRequest(new
                     { userMessage = "Unable to validate tenant existence", status = 409, version = 1.0 });
                 }
 
-                _logger.LogTrace("STEP 7");
+                _logger.LogInformation("STEP 7");
                 var values = JObject.Parse(await resp.Content.ReadAsStringAsync())["value"].Value<JArray>();
                 if (values.Count != 0)
                 {
-                    _logger.LogTrace("Tenant already exists HENCE RETURNING 409");
-                    return new ConflictObjectResult(new
-                    { userMessage = "Tenant already exists", status = 409, version = 1.0 });
+                    _logger.LogInformation("Tenant already exists Let's Update it");
+                    var groups = values.ToObject<List<TenantGroup>>();
+                    var currentGroup = groups
+                        .FirstOrDefault(groupDetail => string.Equals(tenant.name, groupDetail.DisplayName, StringComparison.CurrentCultureIgnoreCase));
+                    if (currentGroup == null)
+                    {
+                        return new ConflictObjectResult(new
+                        { userMessage = "Tenant already exists", status = 409, version = 1.0 });
+                    }
+
+                    // TODO: Temp work around to avoid the second screen of create tenant to fail
+                    // Add extensions (open)
+                    var tenantExtenionDetails = new TenantDetails
+                    {
+                        id = currentGroup.Id,
+                        name = currentGroup.DisplayName.ToUpper(),
+                        ownerId = tenant.ownerId,
+                        description = currentGroup.Description,
+                        allowSameIssuerMembersString = tenant.allowSameIssuerMembersString,
+                        requireMFA = false
+                    };
+
+                    _logger.LogInformation("Tenant exists but update the allowSameIssuerMembers");
+                    tenantExtenionDetails.allowSameIssuerMembers = (!string.IsNullOrEmpty(tenant.allowSameIssuerMembersString) &&
+                                                     (string.CompareOrdinal("allow", tenant.allowSameIssuerMembersString) ==
+                                                      0));
+                    if (!(await UpdateTenantWithAllowUser(tenantExtenionDetails)))
+                    {
+                        _logger.LogInformation("Tenant already exists and updating allowSameIssuerMembers is failed");
+                        return BadRequest(new { userMessage = "Tenant already exists", status = 409, version = 1.0 });
+                    }
+
+                    // add this group to the user's tenant collection
+                    _logger.LogInformation("Finishing Update tenant");
+                    return new OkObjectResult(new { currentGroup.Id, roles = new[] { "admin", "member" }, userMessage = "Tenant created" });
+
                 }
 
-                _logger.LogTrace("STEP 8");
+                _logger.LogInformation("STEP 8");
                 var group = new
                 {
                     description = tenant.description,
@@ -142,42 +172,42 @@ namespace RESTFunctions.Controllers
                 //jGroup.Add("members@odata.bind", JArray.FromObject(owners));
                 //  https://docs.microsoft.com/en-us/graph/api/group-post-groups?view=graph-rest-1.0&tabs=http
 
-                _logger.LogTrace("STEP 9 CREATING TENANT");
+                _logger.LogInformation("STEP 9 CREATING TENANT");
 
                 resp = await http.PostAsync(
                     $"{Graph.BaseUrl}groups",
                     new StringContent(jGroup.ToString(), System.Text.Encoding.UTF8, "application/json"));
                 if (!resp.IsSuccessStatusCode)
                 {
-                    _logger.LogTrace("STEP 9 Tenant creation failed");
+                    _logger.LogInformation("STEP 9 Tenant creation failed");
                     return BadRequest(new { userMessage = "Tenant creation failed", status = 409, version = 1.0 });
                 }
 
-                _logger.LogTrace("STEP 10");
+                _logger.LogInformation("STEP 10");
                 var json = await resp.Content.ReadAsStringAsync();
-                _logger.LogTrace("STEP 11");
+                _logger.LogInformation("STEP 11");
                 var newGroup = JObject.Parse(json);
                 var id = newGroup["id"].Value<string>();
                 // Add extensions (open)
                 tenant.id = id;
 
-                _logger.LogTrace("STEP 12 CreateAsync Tenant extensions");
+                _logger.LogInformation("STEP 12 CreateAsync Tenant extensions");
                 tenant.allowSameIssuerMembers = (!string.IsNullOrEmpty(tenant.allowSameIssuerMembersString) &&
                                                  (string.CompareOrdinal("allow", tenant.allowSameIssuerMembersString) ==
                                                   0));
                 if (!(await _ext.CreateAsync(tenant)))
                 {
-                    _logger.LogTrace("Tenant extensions creation failed");
+                    _logger.LogInformation("Tenant extensions creation failed");
                     return BadRequest(new { userMessage = "Tenant extensions creation failed", status = 409, version = 1.0 });
                 }
 
                 // add this group to the user's tenant collection
-                _logger.LogTrace("Finishing Create tenant");
+                _logger.LogInformation("Finishing Create tenant");
                 return new OkObjectResult(new { id, roles = new[] { "admin", "member" }, userMessage = "Tenant created" });
             }
             catch (Exception ex)
             {
-                _logger.LogTrace($"Failed with **EXCEPTION** {ex.Message}");
+                _logger.LogInformation($"Failed with **EXCEPTION** {ex.Message}");
                 return BadRequest(new { userMessage = $"Bad request {ex.Message}", status = 409, version = 1.0 });
             }
 
@@ -212,6 +242,22 @@ namespace RESTFunctions.Controllers
                 if (!(await _ext.UpdateAsync(tenant)))
                     return BadRequest("Update of extension attributes failed");
                 return new OkObjectResult(new { tenantId, name = tenant.name });
+            }
+        }
+
+        private async Task<bool> UpdateTenantWithAllowUser(TenantDetails tenant)
+        {
+            _logger.LogInformation("Updating UpdateTenantWithAllowUser");
+            using (_logger.BeginScope("PUT tenant"))
+            {
+                try
+                {
+                    return await _ext.UpdateAsync(tenant);
+                }
+                catch
+                {
+                    return false;
+                }
             }
         }
 
@@ -371,10 +417,10 @@ namespace RESTFunctions.Controllers
         [HttpPost("member")]
         public async Task<IActionResult> Member([FromBody] TenantIdMember memb)
         {
-            _logger.LogTrace("Member: {0}", memb.tenantId);
+            _logger.LogInformation("Member: {0}", memb.tenantId);
             //if ((User == null) || (!User.IsInRole("ief"))) return new UnauthorizedObjectResult("Unauthorized");
             var tenantId = memb.tenantId;
-            _logger.LogTrace("Tenant id: {0}", tenantId);
+            _logger.LogInformation("Tenant id: {0}", tenantId);
             if (String.IsNullOrEmpty(tenantId))
                 return new NotFoundObjectResult(new { userMessage = "Tenant does not exist", status = 404, version = 1.0 });
             var http = await _graph.GetClientAsync();
@@ -535,4 +581,24 @@ namespace RESTFunctions.Controllers
         public List<string> roles { get; set; }
         public string name { get; set; }
     }
+
+    public class TenantGroup
+    {
+        [JsonProperty("id")]
+        public string Id { get; set; }
+
+        [JsonProperty("description")]
+        public string Description { get; set; }
+
+        [JsonProperty("displayName")]
+        public string DisplayName { get; set; }
+
+        [JsonProperty("mail")]
+        public object Mail { get; set; }
+
+        [JsonProperty("mailNickname")]
+        public string MailNickname { get; set; }
+
+    }
+
 }
